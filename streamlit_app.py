@@ -1,40 +1,81 @@
-import altair as alt
-import numpy as np
-import pandas as pd
 import streamlit as st
+import tiktoken
 
+from langchain_openai import ChatOpenAI
+
+from langchain_core.messages import AnyMessage, SystemMessage, HumanMessage, AIMessage, ChatMessage
+from typing import List
+
+import os
+import PyPDF2
+
+os.environ["LANGCHAIN_TRACING_V2"]="true"
+os.environ["LANGCHAIN_API_KEY"]=st.secrets['LANGCHAIN_API_KEY']
+os.environ["LANGCHAIN_PROJECT"]="KeyaSessions"
+os.environ['LANGCHAIN_ENDPOINT']="https://api.smith.langchain.com"
+
+def create_llm_message(prompt:str, messages:List):
+  llm_msg=[]
+  llm_msg.append(SystemMessage(content=prompt))
+
+  for msg in messages:
+    if msg["role"]=="user":
+        llm_msg.append(HumanMessage(content=msg['content']))
+    if msg["role"]=="assistant":
+        llm_msg.append(AIMessage(content=msg['content']))
+    if msg["role"]=="system":
+        llm_msg.append(SystemMessage(content=msg['content']))
+  return llm_msg
+
+def pdf_images(uploaded_file):
+    pdf_reader = PyPDF2.PdfReader(uploaded_file)
+    text_content = []
+
+    # Extract text from each page
+    for page in pdf_reader.pages:
+        text_content.append(page.extract_text())
+
+    # Join all the text content into a single string
+    full_text = "\n\n".join(text_content)
+
+    return full_text
+
+SYSTEM_PROMPT=f"""
+You are a helpful and thoughtful doctor and nutrition coach for patients with IBD.
+Keep your responses concise - ideally one paragraph with two-three sentences.
 """
-# Welcome to Streamlit!
 
-Edit `/streamlit_app.py` to customize this app to your heart's desire :heart:.
-If you have any questions, checkout our [documentation](https://docs.streamlit.io) and [community
-forums](https://discuss.streamlit.io).
+avatars={"system":"💻🧠","user":"🧑‍💼","assistant":"🎓"}
+model = ChatOpenAI(model="gpt-4o-mini", temperature=0, api_key = st.secrets['OPENAI_API_KEY'])
+if "messages" not in st.session_state:
+    st.session_state.messages = []
 
-In the meantime, below is an example of what you can do with just a few lines of code:
-"""
+for message in st.session_state.messages:
+    if message["role"] != "system":
+        avatar=avatars[message["role"]]
+        with st.chat_message(message["role"], avatar=avatar):
+            st.markdown(message["content"])
+        
+prompt = st.chat_input("Ask about this session")
+prompt_add=None
+uploaded_file = st.file_uploader("Upload PDF", accept_multiple_files=False)
+if uploaded_file:
+    file_contents=pdf_images(uploaded_file)
+    st.write(f"Uploaded file {uploaded_file.name}")
+    file_content=pdf_images(uploaded_file)
+    prompt_add=f"User uploaded the following PDF: {file_content}"
+if prompt or prompt_add:
+    if prompt:
+        st.session_state.messages.append({"role": "user", "content": prompt})
+        with st.chat_message("user"):
+            st.markdown(prompt)
+    if prompt_add:
+        st.session_state.messages.append({"role": "system", "content": prompt_add})
+    llm_msg=create_llm_message(SYSTEM_PROMPT,st.session_state.messages)
 
-num_points = st.slider("Number of points in spiral", 1, 10000, 1100)
-num_turns = st.slider("Number of turns in spiral", 1, 300, 31)
+    with st.chat_message("assistant", avatar=avatars["assistant"]):
+        response=model.invoke(llm_msg)
+        full_response=response.content
+        st.markdown(full_response)
+    st.session_state.messages.append({"role": "assistant", "content": full_response})
 
-indices = np.linspace(0, 1, num_points)
-theta = 2 * np.pi * num_turns * indices
-radius = indices
-
-x = radius * np.cos(theta)
-y = radius * np.sin(theta)
-
-df = pd.DataFrame({
-    "x": x,
-    "y": y,
-    "idx": indices,
-    "rand": np.random.randn(num_points),
-})
-
-st.altair_chart(alt.Chart(df, height=700, width=700)
-    .mark_point(filled=True)
-    .encode(
-        x=alt.X("x", axis=None),
-        y=alt.Y("y", axis=None),
-        color=alt.Color("idx", legend=None, scale=alt.Scale()),
-        size=alt.Size("rand", legend=None, scale=alt.Scale(range=[1, 150])),
-    ))
